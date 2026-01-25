@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.1.0
+
+- Refactor to dynamically load models
+- Add `--vad-filter`, `--vad-threshold`, `--vad-min-speech-ms`, `--vad-min-silence-ms` (thanks @lmoe)
+
+## 3.0.2
+
+- Set `--data-dir /data` in Docker run script
+
+## 3.0.1
+
+- Fix model auto selection logic
+
+## 3.0.0
+
+- Add support for `sherpa-onnx` and Nvidia's parakeet model
+- Add support for [GigaAM](https://github.com/salute-developers/GigaAM) for Russian via [`onnx-asr`](https://github.com/istupakov/onnx-asr)
+- Add `--stt-library` to select speech-to-text library (deprecate `--use-transformers`)
+- Default `--model` to "auto" (prefer parakeet)
+- Add Docker build here
+- Default `--language` to "auto"
+- Add `--cpu-threads` for faster-whisper (@Zerwin)
+
 ## 2.5.0
 
 - Add support for HuggingFace transformers Whisper models (--use-transformers)

@@ -6,14 +6,16 @@ import logging
 import platform
 import re
 from functools import partial
-from typing import Any
+from typing import Any, Dict, Optional
 
 import faster_whisper
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
-from wyoming.server import AsyncServer
+from wyoming.server import AsyncServer, AsyncTcpServer
 
 from . import __version__
-from .handler import FasterWhisperEventHandler
+from .const import AUTO_LANGUAGE, AUTO_MODEL, PARAKEET_LANGUAGES, SttLibrary
+from .dispatch_handler import DispatchEventHandler
+from .models import ModelLoader
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,12 +23,18 @@ _LOGGER = logging.getLogger(__name__)
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model",
-        required=True,
-        help="Name of faster-whisper model to use (or auto)",
-    )
     parser.add_argument("--uri", required=True, help="unix:// or tcp://")
+    #
+    parser.add_argument(
+        "--zeroconf",
+        nargs="?",
+        const="faster-whisper",
+        help="Enable discovery over zeroconf with optional name (default: faster-whisper)",
+    )
+    #
+    parser.add_argument(
+        "--model", default=AUTO_MODEL, help=f"Name of model to use (or {AUTO_MODEL})"
+    )
     parser.add_argument(
         "--data-dir",
         required=True,
@@ -49,7 +57,8 @@ async def main() -> None:
     )
     parser.add_argument(
         "--language",
-        help="Default language to set for transcription",
+        default=AUTO_LANGUAGE,
+        help=f"Default language to set for transcription (default: {AUTO_LANGUAGE})",
     )
     parser.add_argument(
         "--compute-type",
@@ -59,17 +68,47 @@ async def main() -> None:
     parser.add_argument(
         "--beam-size",
         type=int,
-        default=5,
+        default=0,
         help="Size of beam during decoding (0 for auto)",
     )
     parser.add_argument(
-        "--initial-prompt",
-        help="Optional text to provide as a prompt for the first window",
+        "--cpu-threads",
+        default=4,
+        type=int,
+        help="Number of CPU threads to use for inference (default: 4, faster-whisper ony)",
     )
     parser.add_argument(
-        "--use-transformers",
+        "--initial-prompt",
+        help="Optional text to provide as a prompt for the first window (faster-whisper only)",
+    )
+    parser.add_argument(
+        "--vad-filter",
         action="store_true",
-        help="Use HuggingFace transformers library (requires transformers extras)",
+        help="Enable Silero VAD to filter out non-speech which can reduce hallucinations (default: false, faster-whisper only)",
+    )
+    parser.add_argument(
+        "--vad-threshold",
+        type=float,
+        default=0.5,
+        help="VAD speech probability threshold (default: 0.5, faster-whisper only)",
+    )
+    parser.add_argument(
+        "--vad-min-speech-ms",
+        type=int,
+        default=250,
+        help="VAD minimum speech duration in ms (default: 250, faster-whisper only)",
+    )
+    parser.add_argument(
+        "--vad-min-silence-ms",
+        type=int,
+        default=2000,
+        help="VAD minimum silence duration in ms to split (default: 2000, faster-whisper only)",
+    )
+    parser.add_argument(
+        "--stt-library",
+        choices=[lib.value for lib in SttLibrary],
+        default=SttLibrary.AUTO,
+        help="Set library to use for speech-to-text (may require extra dependencies)",
     )
     parser.add_argument(
         "--local-files-only",
@@ -108,12 +147,10 @@ async def main() -> None:
     )
     _LOGGER.debug(args)
 
-    # Automatic configuration for ARM
+    args.stt_library = SttLibrary(args.stt_library)
+
     machine = platform.machine().lower()
     is_arm = ("arm" in machine) or ("aarch" in machine)
-    if args.model == "auto":
-        args.model = "tiny-int8" if is_arm else "base-int8"
-        _LOGGER.debug("Model automatically selected: %s", args.model)
 
     if args.beam_size <= 0:
         args.beam_size = 1 if is_arm else 5
@@ -121,16 +158,19 @@ async def main() -> None:
 
     # Resolve model name
     model_name = args.model
-    match = re.match(r"^(tiny|base|small|medium)[.-]int8$", args.model)
-    if match:
+    model_match = re.match(r"^(tiny|base|small|medium)[.-]int8$", args.model)
+    if model_match:
         # Original models re-uploaded to huggingface
-        model_size = match.group(1)
+        model_size = model_match.group(1)
         model_name = f"{model_size}-int8"
         args.model = f"rhasspy/faster-whisper-{model_name}"
 
-    if args.language == "auto":
-        # Whisper does not understand "auto"
+    if args.language == AUTO_LANGUAGE:
+        # Whisper does not understand auto
         args.language = None
+
+    if args.model == AUTO_MODEL:
+        args.model = None
 
     wyoming_info = Info(
         asr=[
@@ -152,7 +192,14 @@ async def main() -> None:
                             url="https://huggingface.co/Systran",
                         ),
                         installed=True,
-                        languages=faster_whisper.tokenizer._LANGUAGE_CODES,  # pylint: disable=protected-access
+                        languages=sorted(
+                            list(
+                                # pylint: disable=protected-access
+                                set(faster_whisper.tokenizer._LANGUAGE_CODES).union(
+                                    PARAKEET_LANGUAGES
+                                )
+                            )
+                        ),
                         version=faster_whisper.__version__,
                     )
                 ],
@@ -160,64 +207,55 @@ async def main() -> None:
         ],
     )
 
+    vad_parameters: Optional[Dict[str, Any]] = None
+    if args.vad_filter:
+        vad_parameters = {
+            "threshold": args.vad_threshold,
+            "min_speech_duration_ms": args.vad_min_speech_ms,
+            "min_silence_duration_ms": args.vad_min_silence_ms,
+        }
+
+    loader = ModelLoader(
+        preferred_stt_library=args.stt_library,
+        preferred_language=args.language,
+        download_dir=args.download_dir,
+        local_files_only=args.local_files_only,
+        model=args.model,
+        compute_type=args.compute_type,
+        device=args.device,
+        beam_size=args.beam_size,
+        cpu_threads=args.cpu_threads,
+        initial_prompt=args.initial_prompt,
+        vad_parameters=vad_parameters,
+    )
+
     # Load model
-    _LOGGER.debug("Loading %s", args.model)
-    whisper_model: Any = None
-
-    if args.use_transformers:
-        # Use HuggingFace transformers
-        from .transformers_whisper import TransformersWhisperModel
-
-        whisper_model = TransformersWhisperModel(
-            args.model, args.download_dir, args.local_files_only
-        )
-    else:
-        # Use faster-whisper
-        whisper_model = faster_whisper.WhisperModel(
-            args.model,
-            download_root=args.download_dir,
-            device=args.device,
-            device_index=0,
-            compute_type=args.compute_type,
-        )
+    _LOGGER.debug("Pre-loading transcriber")
+    await loader.load_transcriber()
 
     server = AsyncServer.from_uri(args.uri)
+
+    if args.zeroconf:
+        if not isinstance(server, AsyncTcpServer):
+            raise ValueError("Zeroconf requires tcp:// uri")
+
+        from wyoming.zeroconf import HomeAssistantZeroconf
+
+        tcp_server: AsyncTcpServer = server
+        hass_zeroconf = HomeAssistantZeroconf(
+            name=args.zeroconf, port=tcp_server.port, host=tcp_server.host
+        )
+        await hass_zeroconf.register_server()
+        _LOGGER.debug("Zeroconf discovery enabled")
+
     _LOGGER.info("Ready")
-    model_lock = asyncio.Lock()
-
-    if args.use_transformers:
-        # Use HuggingFace transformers
-        from .transformers_whisper import (
-            TransformersWhisperEventHandler,
-            TransformersWhisperModel,
+    await server.run(
+        partial(
+            DispatchEventHandler,
+            wyoming_info,
+            loader,
         )
-
-        assert isinstance(whisper_model, TransformersWhisperModel)
-
-        # TODO: initial prompt
-        await server.run(
-            partial(
-                TransformersWhisperEventHandler,
-                wyoming_info,
-                args.language,
-                args.beam_size,
-                whisper_model,
-                model_lock,
-            )
-        )
-    else:
-        # Use faster-whisper
-        assert isinstance(whisper_model, faster_whisper.WhisperModel)
-        await server.run(
-            partial(
-                FasterWhisperEventHandler,
-                wyoming_info,
-                args,
-                whisper_model,
-                model_lock,
-                initial_prompt=args.initial_prompt,
-            )
-        )
+    )
 
 
 # -----------------------------------------------------------------------------
