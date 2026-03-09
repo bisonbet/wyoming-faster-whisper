@@ -14,8 +14,8 @@ ExecStart=/$DIR/wyoming-faster-whisper/script/run \
     --data-dir data \
     --download-dir data \
     --stt-library transformers \
-    --device xpu \
-    --local-files-only
+    --device xpu
+# Add --local-files-only here only after the model has been downloaded to data/
 Restart=always
 RestartSec=10
 Environment=HOME=/$DIR/wyoming-faster-whisper

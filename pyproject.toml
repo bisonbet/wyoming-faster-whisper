@@ -72,6 +72,10 @@ dev = [
 transformers = [
     "transformers[torch]==4.52.4",
 ]
+xpu = [
+    "transformers[torch]==4.52.4",
+    "intel-extension-for-pytorch",
+]
 sherpa = [
     "sherpa-onnx==1.12.15",
 ]
