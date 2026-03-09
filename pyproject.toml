@@ -1,6 +1,6 @@
 [project]
 name = "wyoming-faster-whisper"
-version = "3.1.0"
+version = "3.1.1"
 description = "Wyoming Server for Faster Whisper"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -77,4 +77,7 @@ sherpa = [
 ]
 onnx_asr = [
     "onnx-asr[cpu,hub]==0.7.0",
+]
+zeroconf = [
+    "wyoming[zeroconf]",
 ]
