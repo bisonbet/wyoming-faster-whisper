@@ -11,7 +11,7 @@ services:
       - WHISPER_BEAM=1 #optional
       - WHISPER_LANG=en #optional
     volumes:
-      - /home/champ/Sources/wyoming-faster-whisper/dockerdata:/config
+      - /path/to/config:/config
     ports:
       - 10300:10300
     restart: unless-stopped
