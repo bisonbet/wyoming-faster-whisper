@@ -149,6 +149,7 @@ class ModelLoader:
                     model,
                     cache_dir=self.download_dir,
                     local_files_only=self.local_files_only,
+                    device=self.device,
                 )
             else:
                 transcriber = FasterWhisperTranscriber(

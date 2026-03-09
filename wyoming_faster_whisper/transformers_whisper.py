@@ -1,34 +1,50 @@
 """Code for Whisper transcription using HuggingFace's transformers library."""
-
 import wave
 from pathlib import Path
 from typing import Optional, Union
-
+import numpy as np
 import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 from .const import Transcriber
 
 _RATE = 16000
 
-
 class TransformersTranscriber(Transcriber):
     """Wrapper for HuggingFace transformers Whisper model."""
-
     def __init__(
         self,
         model_id: str,
         cache_dir: Optional[Union[str, Path]] = None,
         local_files_only: bool = False,
+        device: str = "cpu",
     ) -> None:
         """Initialize Whisper model."""
+        self.device = device
+        torch_dtype = torch.bfloat16 if device != "cpu" else torch.float32
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            torch_dtype=torch_dtype,
+        )
+        model.to(device)
+        self.is_multilingual = getattr(model.generation_config, "is_multilingual", True)
+        if device != "cpu":
+            import intel_extension_for_pytorch as ipex
+            model = ipex.optimize(model, dtype=torch_dtype)
         self.processor = AutoProcessor.from_pretrained(
-            model_id, cache_dir=cache_dir, local_files_only=local_files_only
+            model_id,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
         )
-        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            model_id, cache_dir=cache_dir, local_files_only=local_files_only
+        self.pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=self.processor.tokenizer,
+            feature_extractor=self.processor.feature_extractor,
+            torch_dtype=torch_dtype,
+            device=device,
         )
-        self.model.eval()
 
     def transcribe(
         self,
@@ -38,7 +54,6 @@ class TransformersTranscriber(Transcriber):
         initial_prompt: Optional[str] = None,
     ) -> str:
         """Returns transcription for WAV file.
-
         WAV file must be 16Khz 16-bit mono audio.
         """
         wav_file: wave.Wave_read = wave.open(str(wav_path), "rb")
@@ -48,33 +63,30 @@ class TransformersTranscriber(Transcriber):
             assert wav_file.getnchannels() == 1, "Audio must be mono"
             audio_bytes = wav_file.readframes(wav_file.getnframes())
 
-        audio_tensor = (
-            torch.frombuffer(audio_bytes, dtype=torch.int16).float() / 32768.0
-        )
+        audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
-        inputs = self.processor(audio_tensor, sampling_rate=_RATE, return_tensors="pt")
-        generate_args = {**inputs, "num_beams": beam_size}
+        generate_kwargs: dict = {"num_beams": beam_size}
+        if self.is_multilingual:
+            generate_kwargs["task"] = "transcribe"
+            if language:
+                generate_kwargs["language"] = language
 
+        # Handle initial_prompt by converting it to prompt_ids
         if initial_prompt:
             prompt_ids = (
                 self.processor.tokenizer(
                     initial_prompt, return_tensors="pt", add_special_tokens=False
                 )
                 .input_ids[0]
-                .to(self.model.device)
+                .to(self.device)
             )
-            generate_args["prompt_ids"] = prompt_ids
+            generate_kwargs["prompt_ids"] = prompt_ids
 
-        if language:
-            self.processor.tokenizer.set_prefix_tokens(
-                language=language, task="transcribe"
-            )
+        result = self.pipe(
+            {"array": audio_array, "sampling_rate": _RATE},
+            chunk_length_s=30,
+            stride_length_s=5,
+            generate_kwargs=generate_kwargs,
+        )
 
-        with torch.no_grad():
-            # Ignore warning about attention_mask because we're only doing a single utterance.
-            generated_ids = self.model.generate(**generate_args)
-            transcription = self.processor.batch_decode(
-                generated_ids, skip_special_tokens=True
-            )[0]
-
-        return transcription
+        return result["text"].strip()  # type: ignore[index]
