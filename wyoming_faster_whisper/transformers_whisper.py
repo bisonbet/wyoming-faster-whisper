@@ -29,7 +29,7 @@ class TransformersTranscriber(Transcriber):
         )
         model.to(device)
         self.is_multilingual = getattr(model.generation_config, "is_multilingual", True)
-        if device != "cpu":
+        if device == "xpu":
             import intel_extension_for_pytorch as ipex
             model = ipex.optimize(model, dtype=torch_dtype)
         self.processor = AutoProcessor.from_pretrained(
