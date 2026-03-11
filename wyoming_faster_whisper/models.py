@@ -149,6 +149,7 @@ class ModelLoader:
                     model,
                     cache_dir=self.download_dir,
                     local_files_only=self.local_files_only,
+                    device=self.device,
                 )
             else:
                 transcriber = FasterWhisperTranscriber(
@@ -179,7 +180,7 @@ class ModelLoader:
             beam_size=self.beam_size,
             initial_prompt=self.initial_prompt,
         )
-        _LOGGER.debug("Transcribed audio: %s", text)
+        _LOGGER.info(text[:50])
 
         return text
 

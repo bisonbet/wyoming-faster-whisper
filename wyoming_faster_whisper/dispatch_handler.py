@@ -90,7 +90,7 @@ class DispatchEventHandler(AsyncEventHandler):
                 initial_prompt=self._loader.initial_prompt,
             )
 
-            _LOGGER.info(text)
+            _LOGGER.info(text[:50])
 
             await self.write_event(Transcript(text=text).event())
             _LOGGER.debug("Completed request")

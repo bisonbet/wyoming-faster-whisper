@@ -1,0 +1,26 @@
+[Unit]
+Description=Whisper Server (Intel Arc)
+After=network.target
+
+[Service]
+Type=simple
+User=$user
+Group=$group
+WorkingDirectory=/$DIR/wyoming-faster-whisper
+ExecStart=/$DIR/wyoming-faster-whisper/script/run \
+    --model distil-whisper/distil-medium.en \
+    --language en \
+    --uri 'tcp://0.0.0.0:10300' \
+    --data-dir data \
+    --download-dir data \
+    --stt-library transformers \
+    --device xpu
+# Add --local-files-only here only after the model has been downloaded to data/
+Restart=always
+RestartSec=10
+Environment=HOME=/$DIR/wyoming-faster-whisper
+Environment=ZES_ENABLE_SYSMAN=1
+Environment=SYCL_CACHE_PERSISTENT=1
+
+[Install]
+WantedBy=multi-user.target

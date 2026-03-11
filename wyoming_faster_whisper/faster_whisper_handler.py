@@ -27,6 +27,7 @@ class FasterWhisperTranscriber(Transcriber):
             model_id,
             download_root=str(cache_dir),
             device=device,
+            device_index=0,
             compute_type=compute_type,
             cpu_threads=cpu_threads,
         )

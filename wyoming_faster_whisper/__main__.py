@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import argparse
 import asyncio
 import logging
@@ -48,6 +49,11 @@ async def main() -> None:
         "--device",
         default="cpu",
         help="Device to use for inference (default: cpu)",
+    )
+    parser.add_argument(
+        "--gpu-id",
+        type=str,
+        help="Specify a single GPU ID to use for inference.",
     )
     parser.add_argument(
         "--language",
@@ -121,6 +127,27 @@ async def main() -> None:
         help="Print version and exit",
     )
     args = parser.parse_args()
+
+    if args.gpu_id:
+        if args.device == "xpu":
+            selector = f"level_zero:{args.gpu_id}"
+            if "ONEAPI_DEVICE_SELECTOR" in os.environ:
+                _LOGGER.warning(
+                    "ONEAPI_DEVICE_SELECTOR is already set to '%s', but will be overridden by --gpu-id '%s'",
+                    os.environ["ONEAPI_DEVICE_SELECTOR"],
+                    args.gpu_id,
+                )
+            _LOGGER.debug("Setting ONEAPI_DEVICE_SELECTOR to %s", selector)
+            os.environ["ONEAPI_DEVICE_SELECTOR"] = selector
+        else:
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                _LOGGER.warning(
+                    "CUDA_VISIBLE_DEVICES is already set to '%s', but will be overridden by --gpu-id '%s'",
+                    os.environ["CUDA_VISIBLE_DEVICES"],
+                    args.gpu_id,
+                )
+            _LOGGER.debug("Setting CUDA_VISIBLE_DEVICES to %s", args.gpu_id)
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 
     if not args.download_dir:
         # Download to first data dir by default
